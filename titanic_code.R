@@ -3,9 +3,9 @@ library(caret)
 library(rpart)
 library(VIM)
 
-list.files(path = "C:/Users/Ryan/Documents/titanic")
-train_data <- read_csv("C:/Users/Ryan/Documents/titanic/train.csv")
-test_data <- read_csv("C:/Users/Ryan/Documents/titanic/test.csv")
+list.files(path = "C:/Users/Ryan's Laptop/Documents/titanic")
+train_data <- read_csv("C:/Users/Ryan's Laptop/Documents/titanic/train.csv")
+test_data <- read_csv("C:/Users/Ryan's Laptop/Documents/titanic/test.csv")
 
 head(train_data)
 head(test_data)
@@ -108,7 +108,7 @@ test_data <- predict(preProc3, test_data)
 ## Create a model##
 
 
-## linear regression model
+## linear regression model, done
 #use stepwise selection (in the kaggle slides), smaller AIC is better 
 fit <- glm(Survived ~ factor(Pclass) + Sex + factor(Pclass)*Sex, data = train_set, family = "binomial")
 summary(fit)
@@ -145,16 +145,8 @@ confusionMatrix(PRE_VDTS,test_val$Survived)
 
 #random forest 
 library(randomForest)
-fit <- randomForest(margin ~ .,data=polls_2008)
-plot(fit)
-
-polls_2008 %>% mutate(y_hat = predict(fit, polls_2008)) %>%
-  ggplot() + 
-  geom_point(aes(day, margin)) + 
-  geom_line(aes(day, y_hat),col="red")
-
 #node is the minium value to split
-train_rf <- randomForest(y ~ ., data=mnist_27$train)
+train_rf <- randomForest(Survived ~  factor(Pclass) +Age_new + Sex + FamilySized, data=train_set)
 confusionMatrix(predict(train_rf, mnist_27$test), mnist_27$test$y) #0.785
 
 install.packages("Rborist")
@@ -171,23 +163,62 @@ submission <- data.frame(PassengerId = test$PassengerId)
 submission$Survived <- predict(rf, extractFeatures(test))
 write.csv(submission, file = "1_random_forest_r_submission.csv", row.names=FALSE)
 
+set.seed(2017)
+caret_matrix <- train(x=train_set[,c('Pclass', 'Age_new', 'Sex', 'FamilySized')], 
+                      y=train_set$Survived, data=train_set, method='rf', 
+                      trControl=trainControl(method="cv", number=4))
+caret_matrix
+solution_rf <- predict(caret_matrix, testClean)
 
-# Knn
-train_knn <- train(Survived ~ Age_new + Sex + factor(Pclass), method = "knn", data = train_set,
+# Knn, done
+train_knn <- train(Survived ~ Age_new + Sex + factor(Pclass) + FamilySized, method = "knn", data = train_set,
                    tuneGrid = data.frame(k=seq(1,71,2)))
 
 plot(train_knn)
 train_knn$bestTune #13 neighbors
 y_hat <- predict(train_knn, test_set, type = "raw")
 survived_pred <- factor(ifelse(y_hat >0.5, 1, 0))
-head(survived_pred)
-confusionMatrix(survived_pred, factor(test_set$Survived)) 
+confusionMatrix(survived_pred, factor(test_set$Survived)) #80.72%
 
 #FDA
 #run a MARS model
+library(mda)
+train_fda <- train(Survived ~ Age_new + Sex + factor(Pclass) + FamilySized, method = "fda", data = train_set)
 
 #Neural Network (maybe)
+library(neuralnet)
+f <- as.formula('Survived ~ Sex + Age_new + FamilySized + Pcalss')
+set.seed(8)
+fit <- neuralnet(f,train_set,hidden=5,linear.output=F)
+plot(fit)
+p <- compute(fit,testData); p <- ifelse(p[[2]]>0.5,1,0)
 
+submit <- data.frame(PassengerId=892:1309,Survived=p)
+write.csv(submit,'TitanicDeepNet.csv',row.names=F)
+x = which( (test$Sex=='male' & p==1) | (test$Sex=='female' & p==0) )
+row.names(test) <- 892:1309; test[x,c('Name','Sex','Age','SibSp','Parch','FareAdj','OneSurvived','AllDied')]
+
+
+nn <- neuralnet(train_set$Survived ~ factor(Pclass) + Age_new + Sex + FamilySized + Embarked, 
+                data = train_set[,-1], hidden = 5, linear.output = F)
+
+# plot network
+plot(nn, rep="best")
+
+library(caret)
+predict <- compute(nn, xtrain.df[,-c(1,9,10)])
+predicted.class=apply(predict$net.result,1,which.max)-1
+confusionMatrix( as.factor(predicted.class), as.factor(xtrain$Survived))
+
+
+#Support Vector Machine, done
+caret_svm <- train(Survived~ factor(Pclass) + Age_new + Sex + FamilySized + Embarked, 
+                   data=train_set, method='svmRadial',  
+                   trControl=trainControl(method="cv", number=5))
+caret_svm
+solution_svm <- predict(caret_svm, test_set)
+survived_svm <- factor(ifelse(solution_svm >0.5, 1, 0))
+confusionMatrix(survived_svm, factor(test_set$Survived)) #81.61%
 
 ## Create output file ##
 survive_test <- predict(fit, test_data, type = "response") #0 to 1 prediction of surival
