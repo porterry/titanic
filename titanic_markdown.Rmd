@@ -9,28 +9,225 @@ output: word_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+## Loading the Data
 
 When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+Loading the was simple but I opted to work on the project on my local computer rather than kaggle's workbook. I did this because I wanted to use GitHub for the project since I work on my laptop and a desktop. 
 
 ```{r Loading Data, message=FALSE}
 library(tidyverse)
 library(caret)
 
-
+#loading the data
 list.files(path = "C:/Users/Ryan's Laptop/Documents/titanic")
 train_data <- read_csv("C:/Users/Ryan's Laptop/Documents/titanic/train.csv")
 test_data <- read_csv("C:/Users/Ryan's Laptop/Documents/titanic/test.csv")
 ```
 
-## Including Plots
 
-You can also embed plots, for example:
+## Desciptive Statistics
+
+I made a table of each of the variables that way I know what values they were able to have. I also graphed a few of the combinations in order to determine if there was any correlation that was easily detectable. First class and fare had the biggest spread when looking at the second graph. 
 
 ```{r pressure, echo=FALSE}
-plot(pressure)
+table(train_data$Pclass)
+table(train_data$Survived)
+table(train_data$Age)
+table(train_data$Embarked)
+table(train_data$SibSp)
+table(train_data$Parch)
+
+aggr(train_data, prop = FALSE, combined = TRUE, numbers = TRUE, sortVars = TRUE, sortCombs = TRUE)
+
+train_data %>%
+  ggplot(aes(Age)) +
+  geom_bar(stat = "count")
+
+train_data %>%
+  ggplot(aes(Pclass, Fare)) +
+  geom_boxplot(aes(group = Pclass))
+
+train_data %>%
+  ggplot(aes(Survived, Age)) +
+  geom_boxplot(aes(group = Survived))
+
+train_data %>%
+  ggplot(aes(Parch, Age)) +
+  geom_boxplot(aes(group = Parch))
 ```
 
+
+## Feature Engineering
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+There were only two different features that I decided to create. I was looking at doing something with tickets and cabin but after looking at public workbooks decided against it. Cabin so many of the values are missing that it would not be a very accurate model with all the imposed numbers. Ticket did not seem to improve many of the scores that I look at so decided to spend time elsewhere. 
+
+
+
+```{r}
+table(train_data$Embarked)
+table(is.na(train_data$Embarked))
+table(is.na(test_data$Embarked))
+train_data <- train_data %>% mutate(Embarked = ifelse(is.na(Embarked), "S", Embarked))
+
+#family size
+train_data$FamilySize <-train_data$SibSp + train_data$Parch + 1 
+train_data$FamilySized[train_data$FamilySize == 1] <- 'Single' 
+train_data$FamilySized[train_data$FamilySize < 5 & train_data$FamilySize >= 2] <- 'Small' 
+train_data$FamilySized[train_data$FamilySize >= 5] <- 'Big' 
+train_data$FamilySized=as.factor(train_data$FamilySized)
+
+table(train_data$FamilySized)
+
+test_data$FamilySize <-test_data$SibSp + test_data$Parch + 1 
+test_data$FamilySized[test_data$FamilySize == 1] <- 'Single' 
+test_data$FamilySized[test_data$FamilySize < 5 & test_data$FamilySize >= 2] <- 'Small' 
+test_data$FamilySized[test_data$FamilySize >= 5] <- 'Big' 
+test_data$FamilySized=as.factor(test_data$FamilySized)
+
+table(test_data$FamilySized)
+
+##Engineer features based on title
+train_data <- mutate(train_data, title_orig = factor(str_extract(Name, "[A-Z][a-z]*\\.")))
+test_data <- mutate(test_data, title_orig = factor(str_extract(Name, "[A-Z][a-z]*\\.")))
+
+table(train_data$title_orig)
+table(test_data$title_orig)
+```
+
+
+## Dealing with Missing Data
+```{r}
+## Create test & train datasets ##
+test_index <- createDataPartition(train_data$Survived, times=1,p=0.5, list=FALSE)
+test_set <- train_data[test_index,]
+train_set <- train_data[-test_index,]
+
+#predict ages into misses values
+#log sibsip + 1, because it has a big negative sibsip right scewed 
+library(naniar)
+miss_var_summary(train_set)
+
+linearMod <- lm(Age ~ Pclass + Sex + log(SibSp+1) + Parch + Fare, data=train_set)
+#look at the model
+summary(linearMod)
+#does it meet the assumptions of a linear model? How do the residuals look
+plot(linearMod)
+#check other assumptions of linear model
+library(car)
+dwt(linearMod) #check for independent errors - want values close to 2.
+vif(linearMod) #check the variance inflation factor - values greater than 10 are problematic
+#predict the age based on the model
+Age_pre_train <- round(predict(linearMod, train_set))
+Age_pre_test_set <- round(predict(linearMod, test_set))
+Age_pre_test_data <- round(predict(linearMod, test_data))
+#set our ages for all three sets
+train_set <- train_set %>% mutate(Age_new = ifelse(is.na(Age), Age_pre_train, Age))
+test_set <- test_set %>% mutate(Age_new = ifelse(is.na(Age), Age_pre_test_set, Age))
+test_data <- test_data %>% mutate(Age_new = ifelse(is.na(Age), Age_pre_test_data, Age))
+
+
+#preprocess for the models you want to run after feature engineering
+#it is important for models like knn
+preProc <- preProcess(test_set[, c("Age_new", "SibSp", "Parch", "Fare")], method=c("center", "scale"))
+test_set <- predict(preProc, test_set)
+preProc2 <- preProcess(train_set[, c("Age_new", "SibSp", "Parch", "Fare")], method=c("center", "scale"))
+train_set <- predict(preProc2, train_set)
+preProc3 <- preProcess(test_data[, c("Age_new", "SibSp", "Parch", "Fare")], method=c("center", "scale"))
+test_data <- predict(preProc3, test_data)
+```
+
+
+## Feature Selection
+```{r}
+aggr(train_data, prop = FALSE, combined = TRUE, numbers = TRUE, sortVars = TRUE, sortCombs = TRUE)
+```
+
+## Linear Regression
+```{r}
+stepwise1 <- glm(Survived ~ factor(Pclass) + Age_new + Sex + FamilySized + Embarked, 
+                 data=train_set, 
+                 family = "binomial")
+
+library(MASS)
+bestModel1 <- stepAIC(stepwise1, direction="both")
+summary(bestModel1)
+survived_hat <- predict(bestModel1, test_set, type="response")
+survived_pred <- factor(ifelse(survived_hat >0.5, 1, 0))
+confusionMatrix(survived_pred, factor(test_set$Survived)) #82.74%
+```
+
+
+## Support Vector Machine
+```{r}
+caret_svm <- train(Survived~ factor(Pclass) + Age_new + Sex + FamilySized + Embarked, 
+                   data=train_set, 
+                   method='svmRadial',  
+                   trControl=trainControl(method="cv", number=5))
+caret_svm
+solution_svm <- predict(caret_svm, test_set)
+survived_svm <- factor(ifelse(solution_svm >0.5, 1, 0))
+confusionMatrix(survived_svm, factor(test_set$Survived)) #81.61%
+```
+
+
+## Knn - K Nearest Neighbors
+```{r}
+train_knn <- train(factor(Survived) ~ Age_new + Sex + factor(Pclass) + FamilySized, 
+                   method = "knn", 
+                   data = train_set,
+                   tuneGrid = data.frame(k=seq(1,71,2)))
+
+plot(train_knn)
+train_knn$bestTune #13 neighbors
+y_hat_knn_prob <- predict(train_knn, test_set, type = "prob")
+y_hat_knn <- predict(train_knn, test_set)
+confusionMatrix(y_hat_knn, factor(test_set$Survived)) #80.72%
+```
+
+
+## Random Forest
+```{r}
+train_rf <- train(factor(Survived) ~  factor(Pclass) + Age_new + Sex + FamilySized + Embarked,
+                  method = "rf",
+                  data=train_set,
+                  tuneGrid = data.frame(mtry=seq(1,14,2)))
+
+y_hat_rf_prob <-predict(train_rf, test_set, type="prob")
+y_hat_rf <- predict(train_rf, test_set)
+confusionMatrix(y_hat_rf, factor(test_set$Survived)) #81.61
+```
+
+
+## AdaBoost
+```{r}
+library(fastAdaboost)
+
+train_ada <- train(factor(Survived) ~ factor(Pclass) + Age_new + Sex + FamilySized + Embarked,
+                   data = train_set,
+                   method = "adaboost",
+                   tuneGrid = data.frame(nIter = seq(1,101,5), method = "adaboost"))
+
+ggplot(train_ada, highlight = TRUE)
+y_hat_ada_prob <- predict(train_ada, test_set, type = "prob")
+y_hat_ada <- predict(train_ada, test_set, type = "raw")
+confusionMatrix(y_hat_ada, factor(test_set$Survived)) #82.51
+```
+
+
+## FDA
+```{r}
+library(mda)
+
+train_fda <- train(factor(Survived) ~ Age_new + Sex + factor(Pclass) + FamilySized, 
+                   method = "fda",
+                   data = train_set)
+
+ggplot(train_fda, highlight = TRUE)
+y_hat_fda <- predict(train_fda, test_set, type = "raw")
+confusionMatrix(y_hat_fda, factor(test_set$Survived)) #79.15
+```
+
+
+## Prediction

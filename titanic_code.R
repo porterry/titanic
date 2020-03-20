@@ -3,9 +3,9 @@ library(caret)
 library(rpart)
 library(VIM)
 
-list.files(path = "C:/Users/Ryan's Laptop/Documents/titanic")
-train_data <- read_csv("C:/Users/Ryan's Laptop/Documents/titanic/train.csv")
-test_data <- read_csv("C:/Users/Ryan's Laptop/Documents/titanic/test.csv")
+list.files(path = "C:/Users/Ryan/Documents/titanic")
+train_data <- read_csv("C:/Users/Ryan/Documents/titanic/train.csv")
+test_data <- read_csv("C:/Users/Ryan/Documents/titanic/test.csv")
 
 head(train_data)
 head(test_data)
@@ -120,7 +120,9 @@ survive_pred <- factor(ifelse(survived_hat > 0.5, 1, 0))
 confusionMatrix(survive_pred, factor(test_set$Survived))
 
 
-stepwise1 <- glm(Survived ~ factor(Pclass) + Age_new + Sex + FamilySized, data=train_set, family = "binomial")
+stepwise1 <- glm(Survived ~ factor(Pclass) + Age_new + Sex + FamilySized + Embarked, 
+                 data=train_set, 
+                 family = "binomial")
 library(MASS)
 #vif(stepwise)
 bestModel1 <- stepAIC(stepwise1, direction="both")
@@ -141,49 +143,54 @@ PRE_VDTS=predict(Model_CDT$finalModel,newdata=test_val,type="class")
 confusionMatrix(PRE_VDTS,test_val$Survived)
 
 
-#Ada Boost
+#Ada Boost, done
+library(fastAdaboost)
 
-#random forest 
+train_ada <- train(factor(Survived) ~ factor(Pclass) + Age_new + Sex + FamilySized + Embarked,
+                   data = train_set,
+                   method = "adaboost",
+                   tuneGrid = data.frame(nIter = seq(1,101,5), method = "adaboost"))
+
+ggplot(train_ada, highlight = TRUE)
+y_hat_ada_prob <- predict(train_ada, test_set, type = "prob")
+y_hat_ada <- predict(train_ada, test_set, type = "raw")
+confusionMatrix(y_hat_ada, factor(test_set$Survived)) #82.51
+
+#random forest, done 
 library(randomForest)
-#node is the minium value to split
-train_rf <- randomForest(Survived ~  factor(Pclass) +Age_new + Sex + FamilySized, data=train_set)
-confusionMatrix(predict(train_rf, mnist_27$test), mnist_27$test$y) #0.785
 
-install.packages("Rborist")
-train_rf2 <- train(y ~., method="Rborist", 
-                   tuneGrid=data.frame(predFixed=2, minNode=c(3,50)),
-                   data=mnist_27$train)
+train_rf <- train(factor(Survived) ~  factor(Pclass) + Age_new + Sex + FamilySized + Embarked,
+                  method = "rf",
+                  data=train_set,
+                  tuneGrid = data.frame(mtry=seq(1,14,2)))
 
-confusionMatrix(predict(train_rf_2, mnist_27$test), mnist_27$test$y)
+y_hat_rf_prob <-predict(train_rf, test_set, type="prob")
+y_hat_rf <- predict(train_rf, test_set)
+confusionMatrix(y_hat_rf, factor(test_set$Survived)) #81.61
 
-#
-rf <- randomForest(extractFeatures(train), as.factor(train$Survived), ntree=100, importance=TRUE)
-
-submission <- data.frame(PassengerId = test$PassengerId)
-submission$Survived <- predict(rf, extractFeatures(test))
-write.csv(submission, file = "1_random_forest_r_submission.csv", row.names=FALSE)
-
-set.seed(2017)
-caret_matrix <- train(x=train_set[,c('Pclass', 'Age_new', 'Sex', 'FamilySized')], 
-                      y=train_set$Survived, data=train_set, method='rf', 
-                      trControl=trainControl(method="cv", number=4))
-caret_matrix
-solution_rf <- predict(caret_matrix, testClean)
 
 # Knn, done
-train_knn <- train(Survived ~ Age_new + Sex + factor(Pclass) + FamilySized, method = "knn", data = train_set,
+train_knn <- train(factor(Survived) ~ Age_new + Sex + factor(Pclass) + FamilySized, 
+                   method = "knn", 
+                   data = train_set,
                    tuneGrid = data.frame(k=seq(1,71,2)))
 
 plot(train_knn)
 train_knn$bestTune #13 neighbors
-y_hat <- predict(train_knn, test_set, type = "raw")
-survived_pred <- factor(ifelse(y_hat >0.5, 1, 0))
-confusionMatrix(survived_pred, factor(test_set$Survived)) #80.72%
+y_hat_knn_prob <- predict(train_knn, test_set, type = "prob")
+y_hat_knn <- predict(train_knn, test_set)
+confusionMatrix(y_hat_knn, factor(test_set$Survived)) #80.72%
 
-#FDA
+#FDA, done 
 #run a MARS model
 library(mda)
-train_fda <- train(Survived ~ Age_new + Sex + factor(Pclass) + FamilySized, method = "fda", data = train_set)
+train_fda <- train(factor(Survived) ~ Age_new + Sex + factor(Pclass) + FamilySized, 
+                   method = "fda",
+                   data = train_set)
+
+ggplot(train_fda, highlight = TRUE)
+y_hat_fda <- predict(train_fda, test_set, type = "raw")
+confusionMatrix(y_hat_fda, factor(test_set$Survived)) #79.15
 
 #Neural Network (maybe)
 library(neuralnet)
@@ -212,7 +219,7 @@ confusionMatrix( as.factor(predicted.class), as.factor(xtrain$Survived))
 
 
 #Support Vector Machine, done
-caret_svm <- train(Survived~ factor(Pclass) + Age_new + Sex + FamilySized + Embarked, 
+caret_svm <- train(Survived ~ factor(Pclass) + Age_new + Sex + FamilySized + Embarked, 
                    data=train_set, method='svmRadial',  
                    trControl=trainControl(method="cv", number=5))
 caret_svm
@@ -220,9 +227,27 @@ solution_svm <- predict(caret_svm, test_set)
 survived_svm <- factor(ifelse(solution_svm >0.5, 1, 0))
 confusionMatrix(survived_svm, factor(test_set$Survived)) #81.61%
 
+# Averaging Predictors
+ens_avg_prob <- (y_hat_ada_prob[,2] + y_hat_knn_prob[,2] + y_hat_rf_prob[,2]) / 3
+ens_avg <- as.factor(ifelse(ens_avg_prob > 0.5, 1, 0))
+head(ens_avg)
+confusionMatrix(ens_avg, factor(test_set$Survived)) #.82
+
+
 ## Create output file ##
-survive_test <- predict(fit, test_data, type = "response") #0 to 1 prediction of surival
+survive_test <- predict(bestModel1, test_data, type = "response") #0 to 1 prediction of surival
 prediction <- factor(ifelse(survive_test > 0.5, 1, 0))
-submission <- test_data %>% select(PassengerId) %>% mutate(Survived = prediction)
+submission <- test_data %>% dplyr::select(PassengerId) %>% mutate(Survived = prediction)
 head(submission)
 write.csv(submission, "submission.csv", row.names=FALSE)
+
+survive_test <- predict(train_ada, test_data, type = "prob") #0 to 1 prediction of surival
+prediction <- factor(ifelse(survive_test > 0.5, 1, 0))
+submission_ada <- test_data %>% dplyr::select(PassengerId) %>% mutate(Survived = prediction)
+head(submission_ada)
+write.csv(submission_ada, "submission_ada.csv", row.names=FALSE)
+
+
+y_hat_ada_prob <- predict(train_ada, test_set, type = "prob")
+y_hat_ada <- predict(train_ada, test_set, type = "raw")
+confusionMatrix(y_hat_ada, factor(test_set$Survived)) #82.51
