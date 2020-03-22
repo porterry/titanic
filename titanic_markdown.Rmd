@@ -9,20 +9,30 @@ output: word_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+The goal is to predict how many people survived and didn't survive the Titanic disaster. Below are different methods that I used in order to predict surivorship. 
+
 ## Loading the Data
 
 When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
 
-Loading the was simple but I opted to work on the project on my local computer rather than kaggle's workbook. I did this because I wanted to use GitHub for the project since I work on my laptop and a desktop. 
+Loading the data was simple but I opted to work on the project on my local computer rather than kaggle's workbook. I did this because I wanted to use GitHub for the project since I work on my laptop and a desktop. 
 
 ```{r Loading Data, message=FALSE}
+#loading packages
 library(tidyverse)
 library(caret)
+library(rpart)
+library(VIM)
+library(naniar)
+library(car)
+library(MASS)
+library(fastAdaboost)
+library(mda)
 
 #loading the data
-list.files(path = "C:/Users/Ryan's Laptop/Documents/titanic")
-train_data <- read_csv("C:/Users/Ryan's Laptop/Documents/titanic/train.csv")
-test_data <- read_csv("C:/Users/Ryan's Laptop/Documents/titanic/test.csv")
+list.files(path = "C:/Users/Ryan/Documents/titanic")
+train_data <- read_csv("C:/Users/Ryan/Documents/titanic/train.csv")
+test_data <- read_csv("C:/Users/Ryan/Documents/titanic/test.csv")
 ```
 
 
@@ -30,7 +40,7 @@ test_data <- read_csv("C:/Users/Ryan's Laptop/Documents/titanic/test.csv")
 
 I made a table of each of the variables that way I know what values they were able to have. I also graphed a few of the combinations in order to determine if there was any correlation that was easily detectable. First class and fare had the biggest spread when looking at the second graph. 
 
-```{r pressure, echo=FALSE}
+```{r pressure,}
 table(train_data$Pclass)
 table(train_data$Survived)
 table(train_data$Age)
@@ -63,12 +73,15 @@ Note that the `echo = FALSE` parameter was added to the code chunk to prevent pr
 
 There were only two different features that I decided to create. I was looking at doing something with tickets and cabin but after looking at public workbooks decided against it. Cabin so many of the values are missing that it would not be a very accurate model with all the imposed numbers. Ticket did not seem to improve many of the scores that I look at so decided to spend time elsewhere. 
 
+Family size I saw the idea on a lot of the public workbooks so I decided to see if it would help my model. I categorized it into three different categories so it would be easy to run analysis and not have too many categories. The other variable that I created was title that the person had. This varaible ended up not helping me since it added no value when prediciting but decide to leave it. There were two missing values in Embarked so I gave them the most common embarked location since they fit the demographic. 
+
 
 
 ```{r}
 table(train_data$Embarked)
 table(is.na(train_data$Embarked))
 table(is.na(test_data$Embarked))
+#only two embarked where missing from all the data
 train_data <- train_data %>% mutate(Embarked = ifelse(is.na(Embarked), "S", Embarked))
 
 #family size
@@ -98,6 +111,9 @@ table(test_data$title_orig)
 
 
 ## Dealing with Missing Data
+
+The category that had the most missing data was Age but I still wanted to use it as a factor. I used the same process that was covered in class since it seemed to be the best method for imposing records. The second high is preprocess the data sets so I don't have to do it later with each model. 
+
 ```{r}
 ## Create test & train datasets ##
 test_index <- createDataPartition(train_data$Survived, times=1,p=0.5, list=FALSE)
@@ -105,17 +121,15 @@ test_set <- train_data[test_index,]
 train_set <- train_data[-test_index,]
 
 #predict ages into misses values
-#log sibsip + 1, because it has a big negative sibsip right scewed 
-library(naniar)
-miss_var_summary(train_set)
+#log sibsip + 1, because it has a big negative, sibsip right scewed 
 
+miss_var_summary(train_set)
 linearMod <- lm(Age ~ Pclass + Sex + log(SibSp+1) + Parch + Fare, data=train_set)
 #look at the model
 summary(linearMod)
 #does it meet the assumptions of a linear model? How do the residuals look
 plot(linearMod)
 #check other assumptions of linear model
-library(car)
 dwt(linearMod) #check for independent errors - want values close to 2.
 vif(linearMod) #check the variance inflation factor - values greater than 10 are problematic
 #predict the age based on the model
@@ -140,18 +154,23 @@ test_data <- predict(preProc3, test_data)
 
 
 ## Feature Selection
+
+I used a few different methods for feature selection. This first method I used was looking at other public workbooks and determining what variables a lot of the higher scoring methods used. I also used trial and error to see if certain features where valuable in changing the accuracy score. The best model from the linear regression method was also helpful determining which variables were useful. The variables that I determined as important are Pclass, Age, Sex, Family Size, and Embarked. 
+
 ```{r}
-aggr(train_data, prop = FALSE, combined = TRUE, numbers = TRUE, sortVars = TRUE, sortCombs = TRUE)
+#summary(bestModel1) table used for feature selection
 ```
 
 ## Linear Regression
+
+Linear Regression with stepwise.
+
 ```{r}
 stepwise1 <- glm(Survived ~ factor(Pclass) + Age_new + Sex + FamilySized + Embarked, 
                  data=train_set, 
                  family = "binomial")
 
-library(MASS)
-bestModel1 <- stepAIC(stepwise1, direction="both")
+bestModel1 <- stepAIC(stepwise1, direction="both") #stepwise in both directions
 summary(bestModel1)
 survived_hat <- predict(bestModel1, test_set, type="response")
 survived_pred <- factor(ifelse(survived_hat >0.5, 1, 0))
@@ -160,15 +179,17 @@ confusionMatrix(survived_pred, factor(test_set$Survived)) #82.74%
 
 
 ## Support Vector Machine
+
+I saw a few people that used SVM on Kaggle so decided to try it out for myself. It was my first time using this model but was pretty straight forward and worked pretty well. 
+
 ```{r}
-caret_svm <- train(Survived~ factor(Pclass) + Age_new + Sex + FamilySized + Embarked, 
-                   data=train_set, 
-                   method='svmRadial',  
+caret_svm <- train(factor(Survived) ~ factor(Pclass) + Age_new + Sex + FamilySized + Embarked, 
+                   data=train_set, method='svmRadial',  
                    trControl=trainControl(method="cv", number=5))
 caret_svm
-solution_svm <- predict(caret_svm, test_set)
-survived_svm <- factor(ifelse(solution_svm >0.5, 1, 0))
-confusionMatrix(survived_svm, factor(test_set$Survived)) #81.61%
+solution_svm <- predict(caret_svm, test_set, type = "raw")
+#survived_svm <- factor(ifelse(solution_svm > 0.5, 1, 0))
+confusionMatrix(solution_svm, factor(test_set$Survived)) #81.61%
 ```
 
 
@@ -177,7 +198,7 @@ confusionMatrix(survived_svm, factor(test_set$Survived)) #81.61%
 train_knn <- train(factor(Survived) ~ Age_new + Sex + factor(Pclass) + FamilySized, 
                    method = "knn", 
                    data = train_set,
-                   tuneGrid = data.frame(k=seq(1,71,2)))
+                   tuneGrid = data.frame(k=seq(1,101,2)))
 
 plot(train_knn)
 train_knn$bestTune #13 neighbors
@@ -188,11 +209,14 @@ confusionMatrix(y_hat_knn, factor(test_set$Survived)) #80.72%
 
 
 ## Random Forest
-```{r}
+
+I actually got one of the best prediction from random forest which is to be expect since it's such a robust  model. 
+
+```{r, warning=FALSE}
 train_rf <- train(factor(Survived) ~  factor(Pclass) + Age_new + Sex + FamilySized + Embarked,
                   method = "rf",
                   data=train_set,
-                  tuneGrid = data.frame(mtry=seq(1,14,2)))
+                  tuneGrid = data.frame(mtry=seq(1,20,2)))
 
 y_hat_rf_prob <-predict(train_rf, test_set, type="prob")
 y_hat_rf <- predict(train_rf, test_set)
@@ -201,8 +225,10 @@ confusionMatrix(y_hat_rf, factor(test_set$Survived)) #81.61
 
 
 ## AdaBoost
+
+Had a lot of hope for this model and was the last model for my submission which actually gave me my best score of 80%. 
+
 ```{r}
-library(fastAdaboost)
 
 train_ada <- train(factor(Survived) ~ factor(Pclass) + Age_new + Sex + FamilySized + Embarked,
                    data = train_set,
@@ -217,17 +243,50 @@ confusionMatrix(y_hat_ada, factor(test_set$Survived)) #82.51
 
 
 ## FDA
+
+Decided to try Flexible Linear Discrimant Analysis since it was the model that I gave the presentation on. It did not work that well with all the different combinations that I used. There are two tuning paramters but got worse results when tuning so left it at default. 
 ```{r}
-library(mda)
 
-train_fda <- train(factor(Survived) ~ Age_new + Sex + factor(Pclass) + FamilySized, 
-                   method = "fda",
-                   data = train_set)
+train_fda2 <- fda(factor(Survived) ~ Age_new + Sex + factor(Pclass) + FamilySized + Embarked,
+                  method = mars,
+                  degree = 2,
+                  data = train_set)
 
-ggplot(train_fda, highlight = TRUE)
-y_hat_fda <- predict(train_fda, test_set, type = "raw")
-confusionMatrix(y_hat_fda, factor(test_set$Survived)) #79.15
+y_hat_fda2 <- predict(train_fda2, test_set)
+confusionMatrix(y_hat_fda2, factor(test_set$Survived)) #80.72%
 ```
 
 
 ## Prediction
+
+I did five submissions which all gave me a score from 77% - 80%. The best scoring one was AdaBoost with the score of 80.382%. I did try using ensemble models but they actually gave me a worse score so decided to focus my work in another direction. I do want to come back sometime over Spring Break and see if I can get an ensemble model to predict in the 80% range. I spent a lot of time getting the models to run and tried to tune them, but there is still a lot of room for improvement in that category. 
+
+```{r,message=FALSE}
+survive_test <- predict(bestModel1, test_data, type = "response") #0 to 1 prediction of surival
+prediction <- factor(ifelse(survive_test > 0.5, 1, 0))
+submission <- test_data %>% dplyr::select(PassengerId) %>% mutate(Survived = prediction)
+head(submission)
+write.csv(submission, "submission.csv", row.names=FALSE)
+
+survive_test_svm <- predict(caret_svm, test_data, type = "raw") #0 to 1 prediction of surival
+submission_svm <- test_data %>% dplyr::select(PassengerId) %>% mutate(Survived = survive_test_svm)
+head(submission_svm)
+write.csv(submission_svm, "submission_svm.csv", row.names=FALSE)
+
+survive_test_rf <- predict(train_rf, test_data, type = "raw") #0 to 1 prediction of surival
+submission_rf <- test_data %>% dplyr::select(PassengerId) %>% mutate(Survived = survive_test_rf)
+head(submission_rf)
+write.csv(submission_rf, "submission_rf.csv", row.names=FALSE)
+
+survive_test_fda <- predict(train_fda2, test_data) #0 to 1 prediction of surival
+submission_fda <- test_data %>% dplyr::select(PassengerId) %>% mutate(Survived = survive_test_fda)
+head(submission_rf)
+write.csv(submission_fda, "submission_fda.csv", row.names=FALSE)
+
+survive_test_ada <- predict(train_ada, test_data, type = "raw") #0 to 1 prediction of surival
+submission_ada <- test_data %>% dplyr::select(PassengerId) %>% mutate(Survived = survive_test_ada)
+head(submission_rf)
+write.csv(submission_ada, "submission_ada.csv", row.names=FALSE)
+
+```
+
